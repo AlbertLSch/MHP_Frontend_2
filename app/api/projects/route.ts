@@ -1,98 +1,52 @@
+/**
+ * /api/projects – thin proxy to the Cloudflare Worker (D1-backed).
+ *
+ * All project data lives in the Worker's D1 database so it survives
+ * Vercel cold starts.  The Next.js route just forwards requests and
+ * translates responses.
+ *
+ * Required env var (server-side only, no NEXT_PUBLIC prefix needed):
+ *   MCP_API_URL=https://bauordnungsamt-muenster-mcp.<subdomain>.workers.dev
+ *
+ * Falls back to NEXT_PUBLIC_MCP_API_URL, then localhost:8787.
+ */
+
 import { NextResponse } from "next/server"
-import type { Project } from "@/lib/types"
 
-// In-memory storage (in production, use a database)
-let projects: Project[] = []
+const WORKER =
+  (process.env.MCP_API_URL ?? process.env.NEXT_PUBLIC_MCP_API_URL ?? "http://localhost:8787")
+    .replace(/\/$/, "")
 
-// GET - Alle Projekte abrufen
+// GET – list all projects
 export async function GET() {
-  return NextResponse.json({ projects })
+  try {
+    const res  = await fetch(`${WORKER}/api/projects`, { cache: "no-store" })
+    const data = await res.json()
+    return NextResponse.json(data, { status: res.status })
+  } catch (err) {
+    console.error("[/api/projects GET]", err)
+    return NextResponse.json({ projects: [] }, { status: 200 })
+  }
 }
 
-// POST - Neues Projekt vom MCP Server empfangen
+// POST – create / update project (LLM calls this with roadmap data)
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    
-    // Validierung
-    if (!body.name || !body.type || !body.stations) {
-      return NextResponse.json(
-        { error: "Fehlende Pflichtfelder: name, type, stations" },
-        { status: 400 }
-      )
-    }
-
-    const newProject: Project = {
-      id: body.id || crypto.randomUUID(),
-      name: body.name,
-      description: body.description || "",
-      type: body.type,
-      createdAt: new Date(),
-      vorgangs_nummer: body.vorgangs_nummer || undefined,
-      stations: body.stations.map((station: Partial<Project["stations"][0]>, index: number) => ({
-        id: station.id || `station-${index + 1}`,
-        title: station.title || `Station ${index + 1}`,
-        description: station.description || "",
-        documents: station.documents || [],
-        status: station.status || "pending",
-        uploadedFile: station.uploadedFile || undefined,
-      })),
-    }
-
-    // Bestehendes Projekt mit gleicher ID ersetzen oder neues hinzufügen
-    const existingIndex = projects.findIndex(p => p.id === newProject.id)
-    if (existingIndex >= 0) {
-      projects[existingIndex] = newProject
-    } else {
-      projects.push(newProject)
-    }
-
-    return NextResponse.json({ 
-      success: true, 
-      project: newProject,
-      message: "Projekt erfolgreich erstellt/aktualisiert"
+    const res  = await fetch(`${WORKER}/api/projects`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify(body),
     })
-  } catch (error) {
-    console.error("Fehler beim Verarbeiten der Anfrage:", error)
-    return NextResponse.json(
-      { error: "Ungültige Anfrage" },
-      { status: 400 }
-    )
+    const data = await res.json()
+    return NextResponse.json(data, { status: res.status })
+  } catch (err) {
+    console.error("[/api/projects POST]", err)
+    return NextResponse.json({ error: "Worker nicht erreichbar" }, { status: 502 })
   }
 }
 
-// DELETE - Projekt löschen
-export async function DELETE(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url)
-    const projectId = searchParams.get("id")
-
-    if (!projectId) {
-      return NextResponse.json(
-        { error: "Projekt-ID erforderlich" },
-        { status: 400 }
-      )
-    }
-
-    const initialLength = projects.length
-    projects = projects.filter(p => p.id !== projectId)
-
-    if (projects.length === initialLength) {
-      return NextResponse.json(
-        { error: "Projekt nicht gefunden" },
-        { status: 404 }
-      )
-    }
-
-    return NextResponse.json({ 
-      success: true, 
-      message: "Projekt gelöscht" 
-    })
-  } catch (error) {
-    console.error("Fehler beim Löschen:", error)
-    return NextResponse.json(
-      { error: "Fehler beim Löschen" },
-      { status: 500 }
-    )
-  }
+// DELETE – no-op for D1 (data stays in Cloudflare; just acknowledge)
+export async function DELETE() {
+  return NextResponse.json({ success: true, message: "Hinweis: Daten bleiben in D1 erhalten." })
 }

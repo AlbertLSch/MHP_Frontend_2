@@ -1,15 +1,15 @@
 /**
- * Upload a file directly to the MCP Worker (Cloudflare R2 + D1).
+ * Upload a file to the MCP Worker via the Next.js proxy route.
  *
- * Uses the one-shot endpoint:
- *   POST {MCP_API_URL}/api/vorgaenge/:vorgangsNummer/dokumente
+ * The browser calls /api/vorgaenge/:nr/dokumente (Next.js),
+ * which forwards to the Cloudflare Worker.  This way the Worker URL
+ * never needs to be exposed to the browser (no NEXT_PUBLIC_MCP_API_URL needed).
  *
- * The Worker creates the DB slot and stores the file atomically.
+ * The Worker creates the D1 slot and stores the file in R2 atomically.
  * The returned upload_id can be passed to the LLM which then calls
- * confirm_upload(upload_id) to verify the upload.
+ * confirm_upload(upload_id) to verify.
  */
 
-import { MCP_API_URL } from './config'
 import type { McpUploadResult } from './types'
 
 /** Map station titles / document names to Worker document_type enum values. */
@@ -36,8 +36,9 @@ export async function mcpUploadDocument(
   formData.append('document_type', document_type)
   formData.append('filename', file.name)
 
+  // Use relative URL → routed through Next.js proxy (no CORS, no Worker URL in browser)
   const res = await fetch(
-    `${MCP_API_URL}/api/vorgaenge/${encodeURIComponent(vorgangs_nummer)}/dokumente`,
+    `/api/vorgaenge/${encodeURIComponent(vorgangs_nummer)}/dokumente`,
     { method: 'POST', body: formData },
   )
 
